@@ -93,3 +93,13 @@ message AgentRun {
 message AgentTaskResp {
   string run_id = 1;
 }
+
+// 任务会话:归组多次 agent 任务运行(与 AgentConversation 对齐)。
+// runs 仅在"取会话详情"时填充,列表接口不带(避免拉全量 transcript)。
+message AgentTaskSession {
+  int32 id = 1;
+  string title = 2;
+  string created_at = 3;
+  string updated_at = 4;
+  repeated AgentRun runs = 5;
+}
