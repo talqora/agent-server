@@ -87,6 +87,9 @@ message AgentRun {
   optional string progress_msg = 4;
   string created_at = 5;
   repeated RunEvent events = 6;
+  // 该 run 的任务文本(agent_task 提交时的自然语言,后端截断 255)。
+  // 取会话详情时用于渲染用户气泡;stream/snapshot 场景可能不带,故 optional。
+  optional string task = 7;
 }
 
 // 提交 agent 任务响应。
