@@ -17,6 +17,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { RunsModule } from './modules/runs/runs.module';
 import { DocumentsModule } from './modules/documents/documents.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
+import { TaskSessionsModule } from './modules/task-sessions/task-sessions.module';
 import { AgentModule } from './modules/agent/agent.module';
 
 @Module({
@@ -35,6 +36,7 @@ import { AgentModule } from './modules/agent/agent.module';
     RunsModule,
     DocumentsModule,
     ConversationsModule,
+    TaskSessionsModule,
     AgentModule,
   ],
 })

@@ -28,6 +28,7 @@ model User {
   documents     Document[]
   conversations Conversation[]
   runs          Run[]
+  taskSessions  TaskSession[]
 
   @@unique([issuer, subject])
   @@map("users")
@@ -104,24 +105,43 @@ model Message {
   @@map("messages")
 }
 
+// ============ 任务会话(归组多次 agent 任务运行,对齐 Conversation)============
+model TaskSession {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  title     String   @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runs Run[]
+
+  @@index([userId, updatedAt])
+  @@map("task_sessions")
+}
+
 // ============ 运行(泛化:摄取作业 + agent 任务共用)============
 model Run {
-  id          Int       @id @default(autoincrement())
-  runId       String    @unique @map("run_id") @db.VarChar(64)
-  userId      Int       @map("user_id")
-  kind        String    @db.VarChar(32) // ingestion / agent_task
-  refId       String?   @map("ref_id") @db.VarChar(64) // 关联的 documentId / conversationId
-  task        String    @db.VarChar(255)
-  status      String    @db.VarChar(32) // queued / running / completed / failed
-  progressMsg String?   @map("progress_msg") @db.VarChar(255)
-  startedAt   DateTime? @map("started_at")
-  completedAt DateTime? @map("completed_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
+  id            Int       @id @default(autoincrement())
+  runId         String    @unique @map("run_id") @db.VarChar(64)
+  userId        Int       @map("user_id")
+  kind          String    @db.VarChar(32) // ingestion / agent_task
+  refId         String?   @map("ref_id") @db.VarChar(64) // 关联的 documentId / conversationId
+  // agent_task 运行归属的任务会话(ingestion 运行为 null);删会话级联删其 runs + run_events。
+  taskSessionId Int?      @map("task_session_id")
+  task          String    @db.VarChar(255)
+  status        String    @db.VarChar(32) // queued / running / completed / failed
+  progressMsg   String?   @map("progress_msg") @db.VarChar(255)
+  startedAt     DateTime? @map("started_at")
+  completedAt   DateTime? @map("completed_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
-  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  events RunEvent[]
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskSession TaskSession? @relation(fields: [taskSessionId], references: [id], onDelete: Cascade)
+  events      RunEvent[]
 
   @@index([userId, createdAt])
+  @@index([taskSessionId])
   @@map("runs")
 }
 

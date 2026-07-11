@@ -6,6 +6,7 @@ import { RunEngineService } from '../../shared/run-engine/run-engine.service';
 import { RUNS_QUEUE, type RunJobData } from '../../shared/queue/queue.types';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { AuthedUser } from '../auth/jwt.strategy';
+import { TaskSessionsService } from '../task-sessions/task-sessions.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 
 /**
@@ -18,6 +19,7 @@ export class AgentController {
   constructor(
     @InjectQueue(RUNS_QUEUE) private readonly runsQueue: Queue<RunJobData>,
     private readonly runEngine: RunEngineService,
+    private readonly taskSessions: TaskSessionsService,
   ) {}
 
   @Post('tasks')
@@ -29,15 +31,23 @@ export class AgentController {
     @CurrentUser() user: AuthedUser,
     @Body() dto: CreateTaskDto,
   ): Promise<{ runId: string }> {
+    // 先校验会话归属:非本人会话直接 404,不建 run、不入队
+    const session = await this.taskSessions.ensureOwned(
+      user.userId,
+      dto.sessionId,
+    );
     const run = await this.runEngine.createRun({
       userId: user.userId,
       kind: 'agent_task',
       task: dto.task.slice(0, 255),
+      taskSessionId: session.id,
     });
     await this.runsQueue.add('agent', {
       runId: run.runId,
       userId: user.userId,
     });
+    // 触碰会话:刷新排序时间 + 首个任务回填标题
+    await this.taskSessions.touchOnSubmit(user.userId, session.id, dto.task);
     return { runId: run.runId };
   }
 }
