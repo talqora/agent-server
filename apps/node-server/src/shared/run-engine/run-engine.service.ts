@@ -23,6 +23,7 @@ export class RunEngineService {
     kind: RunKind;
     task: string;
     refId?: string;
+    taskSessionId?: number;
   }): Promise<Run> {
     return this.prisma.run.create({
       data: {
@@ -31,6 +32,7 @@ export class RunEngineService {
         kind: input.kind,
         task: input.task,
         refId: input.refId ?? null,
+        taskSessionId: input.taskSessionId ?? null,
         status: 'queued',
       },
     });
