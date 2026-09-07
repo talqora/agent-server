@@ -1,0 +1,63 @@
+name: publish-contracts
+
+# 发布 @talqora/agent-contracts(agent 契约的 TS 产物)到 GitHub Packages。
+#
+# 触发:push 到 main 且改动了契约相关文件。仅当 package.json 的 version 尚未发布过时才真正 publish
+# (npm publish 对已存在版本会报错,故先探测跳过),因此"改契约"的标准流程是:
+#   改 proto → buf generate → bump packages/agent-contracts/package.json 的 version → 合并 main。
+#
+# 前置(一次性,二选一):GitHub Packages 发布到 @talqora 作用域,要求发布身份对 talqora 组织有
+# packages:write 权限。
+#   方案A(推荐):把本仓库转入 talqora 组织。此时内置 GITHUB_TOKEN 即对本组织 packages 有写权限,
+#            无需任何额外密钥。
+#   方案B:仓库留在当前 owner(如 fdahk)。GITHUB_TOKEN 只对本仓 owner 的 packages 有权,发不到
+#            talqora,须配一枚对 talqora 有 write:packages 的 PAT 作仓库 Secret「PACKAGES_TOKEN」。
+# 下面的 token 优先用 PACKAGES_TOKEN,缺省回退 GITHUB_TOKEN——两种方案都能直接工作。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'proto/**'
+      - 'buf.gen.yaml'
+      - 'packages/agent-contracts/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/agent-contracts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@talqora'
+      - name: Install deps
+        run: npm install --no-audit --no-fund
+      - name: Build
+        run: npm run build
+      - name: Detect if version already published
+        id: check
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          if npm view "@talqora/agent-contracts@$VER" version >/dev/null 2>&1; then
+            echo "已发布 $VER,跳过。"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "待发布 $VER。"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Publish
+        if: steps.check.outputs.publish == 'true'
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
