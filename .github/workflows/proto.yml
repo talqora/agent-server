@@ -1,0 +1,43 @@
+name: proto
+
+# 契约防漂移:agent-server 是 agent 域契约的权威来源(proto)。
+# 校验 proto 规范、不兼容变更,以及生成物(node-server 内部 gen + 对外类型包 gen)是否最新。
+# 与 our-chat 的 proto.yml 对齐,补上 agent-server 此前缺失的契约 CI。
+on:
+  pull_request:
+    paths:
+      - 'proto/**'
+      - 'buf.yaml'
+      - 'buf.gen.yaml'
+      - 'apps/node-server/src/contracts/gen/**'
+      - 'packages/agent-contracts/src/gen/**'
+  push:
+    branches: [main]
+    paths:
+      - 'proto/**'
+      - 'buf.yaml'
+      - 'buf.gen.yaml'
+
+jobs:
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # buf breaking 需要 main 历史做基线
+      - uses: bufbuild/buf-setup-action@v1
+      - name: Lint
+        run: buf lint
+      - name: Breaking change check (vs main)
+        run: |
+          if git cat-file -e main:buf.yaml 2>/dev/null; then
+            buf breaking --against '.git#branch=main'
+          else
+            echo "main 尚无 proto 基线,跳过 breaking 检查(合并到 main 后自动生效)"
+          fi
+      - name: Generated code freshness
+        run: |
+          buf generate
+          git diff --exit-code -- \
+            apps/node-server/src/contracts/gen \
+            packages/agent-contracts/src/gen

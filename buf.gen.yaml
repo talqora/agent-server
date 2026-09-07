@@ -1,7 +1,20 @@
 version: v2
 plugins:
-  - remote: buf.build/community/stephenh-ts-proto
+  # ① node-server 内部消费(bundle 进镜像,构建期零外部依赖);保持原样。
+  # 钉版本 v2.11.8 与 our-chat 保持一致,保证跨仓生成物可复现、freshness CI 稳定。
+  - remote: buf.build/community/stephenh-ts-proto:v2.11.8
     out: apps/node-server/src/contracts/gen
+    opt:
+      - onlyTypes=true
+      - forceLong=number
+      - useDate=string
+      - useOptionals=messages
+      - esModuleInterop=true
+  # ② 对外发布产物:@talqora/agent-contracts 的 TS 源。与①同插件同 opt,
+  #    单次 buf generate 产出两份字节一致的 gen;发布包给 web 及未来 TS 消费方。
+  #    权威始终是 proto,本目录是它的生成物(freshness CI 校验不漂移)。
+  - remote: buf.build/community/stephenh-ts-proto:v2.11.8
+    out: packages/agent-contracts/src/gen
     opt:
       - onlyTypes=true
       - forceLong=number
