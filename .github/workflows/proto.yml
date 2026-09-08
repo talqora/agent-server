@@ -17,6 +17,8 @@ on:
       - 'proto/**'
       - 'buf.yaml'
       - 'buf.gen.yaml'
+      - '.github/workflows/proto.yml'
+  workflow_dispatch:
 
 jobs:
   proto:
