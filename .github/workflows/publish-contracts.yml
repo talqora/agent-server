@@ -15,7 +15,7 @@ name: publish-contracts
 # 下面的 token 优先用 PACKAGES_TOKEN,缺省回退 GITHUB_TOKEN——两种方案都能直接工作。
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - 'proto/**'
       - 'buf.gen.yaml'

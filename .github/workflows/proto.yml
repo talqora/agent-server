@@ -12,7 +12,7 @@ on:
       - 'apps/node-server/src/contracts/gen/**'
       - 'packages/agent-contracts/src/gen/**'
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - 'proto/**'
       - 'buf.yaml'
@@ -28,12 +28,12 @@ jobs:
       - uses: bufbuild/buf-setup-action@v1
       - name: Lint
         run: buf lint
-      - name: Breaking change check (vs main)
+      - name: Breaking change check (vs master)
         run: |
-          if git cat-file -e main:buf.yaml 2>/dev/null; then
-            buf breaking --against '.git#branch=main'
+          if git cat-file -e master:buf.yaml 2>/dev/null; then
+            buf breaking --against '.git#branch=master'
           else
-            echo "main 尚无 proto 基线,跳过 breaking 检查(合并到 main 后自动生效)"
+            echo "master 尚无 proto 基线,跳过 breaking 检查(合并到 master 后自动生效)"
           fi
       - name: Generated code freshness
         run: |

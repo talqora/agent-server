@@ -118,8 +118,8 @@ node-server 也消费契约（`chat.service.ts` import 了 `Citation`）。理�
 ```
 
 防漂移由两条 CI 守住：
-- `proto.yml`：`buf lint` + `buf breaking`（对 main 基线）+ **生成物新鲜度**（`buf generate` 后 `git diff --exit-code`，两份 gen 都查）。
-- `publish-contracts.yml`：push main 且版本未发布过时，发布类型包到 GitHub Packages。
+- `proto.yml`：`buf lint` + `buf breaking`（对 master 基线；agent-server 默认分支是 master）+ **生成物新鲜度**（`buf generate` 后 `git diff --exit-code`，两份 gen 都查）。
+- `publish-contracts.yml`：push master 且版本未发布过时，发布类型包到 GitHub Packages。
 
 ---
 
@@ -168,8 +168,8 @@ node-server 也消费契约（`chat.service.ts` import 了 `Citation`）。理�
 
 **Phase 1 — 发布契约包（agent-server）**
 ```bash
-# 在 agent-server，合并 feat/agent-contract-ownership → main（--no-ff，按项目规范）
-# push main 触发 publish-contracts.yml：
+# 在 agent-server，合并 feat/agent-contract-ownership → master（--no-ff，按项目规范；默认分支 master）
+# push master 触发 publish-contracts.yml：
 #   → buf 生成 → tsc build → 探测 0.1.0 未发布 → npm publish 到 GitHub Packages
 # 验证：GitHub 仓库 Packages 页出现 @talqora/agent-contracts@0.1.0
 ```
@@ -190,7 +190,7 @@ npm run lint && npm test          # web 完工门禁
 ### 后续改契约的标准流程
 ```
 改 proto → buf generate → bump packages/agent-contracts/package.json version（破坏性=major）
-→ 合并 main（proto.yml 校验 lint/breaking/freshness）→ publish-contracts.yml 自动发布
+→ 合并 master（proto.yml 校验 lint/breaking/freshness）→ publish-contracts.yml 自动发布
 → 消费方 pnpm up @talqora/agent-contracts
 ```
 
