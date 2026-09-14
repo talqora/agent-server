@@ -5,8 +5,8 @@ name: deploy
 # 为什么源码走 runner→服务器 scp，而不在服务器 git clone：国内服务器 git clone github 会被 GFW 重置
 #   (GnuTLS recv error -110)。runner 在 GitHub 内网,checkout 极快;源码仅 ~MB,经已打通的 SSH 通道 scp 很稳。
 # 为什么不在 CI build 再推镜像：大镜像跨墙拉/推都不稳(GHCR blob 被墙、Docker Hub 公益源大层易抖、
-#   TCR runner→国内上传大层会断)。改服务器本地 build:依赖走国内源(npmmirror,compose build-arg 注入)，
-#   基础镜像走 daemon 镜像加速，全程不跨墙传大层。
+#   TCR runner→国内上传大层会断)。改服务器本地 build:Python 依赖走官方 PyPI(镜像构建期由服务器网络拉取),
+#   基础镜像(python:3.12-slim / uv)走 daemon 镜像加速，全程不跨墙传大层。
 # 与 our-chat 同机、同模式：① 通用非机密在 compose 默认值；② 机密 + 因环境而异统一放 GitHub Secrets。
 #   ② 由本工作流在部署时注入、在服务器生成 .env，服务器零手工维护。
 # 想用 dev 触发，把 branches 改成 [dev]；workflow_dispatch 支持手动触发。
@@ -54,8 +54,8 @@ jobs:
           fi
           echo "✅ 所有必填 Secret 齐全（environment: pro 读取正常）"
 
-      # 把构建上下文(apps/node-server 源码 + docker/) scp 到服务器。仅 git 跟踪文本源码,~MB,经 SSH 很稳。
-      # overwrite 覆盖旧源码;不删服务器侧专属文件(.env 不在源码里,scp 不动它)。
+      # 把构建上下文(rag-server + agent-core + 工作区清单 + docker/) scp 到服务器。
+      # 仅 git 跟踪文本源码,~MB,经 SSH 很稳。overwrite 覆盖旧源码;不删服务器侧专属文件(.env 不在源码里)。
       - name: 同步构建上下文到服务器
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -63,7 +63,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          source: 'apps/node-server,docker'
+          source: 'apps/rag-server,packages/agent-core,pyproject.toml,uv.lock,docker'
           target: ${{ secrets.DEPLOY_PATH || '/opt/agent-server' }}
           overwrite: true
 

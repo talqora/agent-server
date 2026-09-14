@@ -1,0 +1,22 @@
+# 构建上下文 = 仓库根;尽量瘦身(仅需要:pyproject.toml / uv.lock / packages/agent-core / apps/rag-server)
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/node_modules
+**/dist
+apps/node-server
+docs
+storage
+tools
+docker
+perf
+web
+*.md
+.env
+.env.*
+!.env.example

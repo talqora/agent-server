@@ -1,4 +1,4 @@
-# agent-server 本地开发:只起中间件(postgres + redis + milvus 栈),业务跑在宿主机热重载。
+# agent-server 本地开发:只起中间件(postgres + redis + pulsar + milvus 栈),业务跑在宿主机热重载。
 #
 # 推荐用仓库根 Makefile 一键起全部:make dev
 # 本文件单独用:make middleware,或 cd docker && docker compose -f docker-compose.dev.yml up -d
@@ -71,7 +71,8 @@ services:
     networks: [agent-server]
 
   minio:
-    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    # MinIO 官方已从 Docker Hub 迁到 quay.io(minio/minio 在 Hub 上已不可拉)
+    image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
     container_name: agent-minio
     restart: unless-stopped
     environment:
@@ -115,6 +116,28 @@ services:
         condition: service_healthy
     networks: [agent-server]
 
+  # ── Pulsar(任务队列;standalone 单进程,开发用)──
+  pulsar:
+    image: apachepulsar/pulsar:3.3.0
+    container_name: agent-pulsar
+    restart: unless-stopped
+    command: ['bin/pulsar', 'standalone']
+    environment:
+      # standalone 内置 broker + bookkeeper;限制 JVM 内存,单机开发友好
+      PULSAR_MEM: '-Xms256m -Xmx768m -XX:MaxDirectMemorySize=256m'
+    ports:
+      - '${PULSAR_PORT:-6650}:6650'       # broker(binary protocol)
+      - '${PULSAR_HTTP_PORT:-8081}:8080'  # admin / REST
+    volumes:
+      - pulsar_data:/pulsar/data
+    healthcheck:
+      test: ['CMD-SHELL', 'bin/pulsar-admin brokers healthcheck']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks: [agent-server]
+
 volumes:
   postgres_data:
     name: agent-server-postgres-data
@@ -126,6 +149,8 @@ volumes:
     name: agent-server-minio-data
   milvus_data:
     name: agent-server-milvus-data
+  pulsar_data:
+    name: agent-server-pulsar-data
 
 networks:
   agent-server:

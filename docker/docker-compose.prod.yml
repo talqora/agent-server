@@ -4,18 +4,47 @@
 # 本服务经 oc-shared 访问 our-chat 的 JWKS 验签）。详见 docs/技术方案/agent-server对外入口方案对比…md。
 #
 # 配置分层：① 通用非机密 → 本文件 environment 默认值；② 机密 + 因环境而异 → 由 GitHub Actions
-# 在部署时按 Secrets 生成 /opt/agent-server/.env（env_file 注入；compose 同时读它做 ${} 替换）。
+# 在部署时按 Secrets 生成 /opt/agent-server/docker/.env（env_file 注入；compose 同时读它做 ${} 替换）。
 #
-# 生产用腾讯 COS 作 Milvus 对象存储：已去掉 minio 服务，milvus 的 MINIO_* 指向 COS（凭据来自 .env）。
+# 生产用腾讯 COS 作 Milvus 对象存储：无 minio 服务，milvus 的 MINIO_* 指向 COS（凭据来自 .env）。
+# 任务队列用**自建 Pulsar**（standalone 单进程容器；与 dev 同构）。
 #
 # 部署目录布局（CI 维护，运维零手工）：
 #   /opt/agent-server/
-#     apps/node-server/          # CI 每次 scp 同步(node-server 构建上下文)
-#     docker/                    # CI 每次 scp 同步(本 compose)
-#     docker/.env                # CI 每次按 Secrets 重写(compose 在 docker/ 运行)
+#     pyproject.toml uv.lock     # Python 工作区清单（镜像构建需要）
+#     apps/rag-server/           # CI 每次 scp 同步（构建上下文）
+#     packages/agent-core/       # CI 每次 scp 同步（共享库）
+#     docker/                    # CI 每次 scp 同步（本 compose）
+#     docker/.env                # CI 每次按 Secrets 重写（compose 在 docker/ 运行）
 #
 # 前置：服务器需存在外部网络  →  docker network create oc-shared
 name: agent-server
+
+# 应用通用环境（rag-http / rag-worker 共享；YAML 锚点复用）
+x-rag-app-env: &rag-app-env
+  ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agent_server}
+  REDIS_URL: redis://redis:6379
+  PULSAR_URL: pulsar://pulsar:6650
+  PULSAR_TOPIC: rag-runs
+  PULSAR_SUBSCRIPTION: rag-worker
+  MILVUS_ADDRESS: milvus:19530
+  MILVUS_TOKEN: ${MILVUS_TOKEN:-}
+  MILVUS_COLLECTION: ${MILVUS_COLLECTION:-rag_knowledge_chunks}
+  # 向量维度：必须与 LLM_EMBED_MODEL 输出一致（千问 text-embedding-v3 默认 1024）。换模型要重建集合！
+  MILVUS_VECTOR_SIZE: ${MILVUS_VECTOR_SIZE:-1024}
+  # 千问（DashScope）OpenAI 兼容端点；KEY 走 .env
+  LLM_BASE_URL: ${LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+  LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:-qwen-plus}
+  LLM_EMBED_MODEL: ${LLM_EMBED_MODEL:-text-embedding-v3}
+  JWT_EXPIRE_SECONDS: ${JWT_EXPIRE_SECONDS:-7200}
+  # JWKS 验签：经 oc-shared 直连 our-chat 的 server 容器（按容器名）
+  OAUTH_JWKS_URI: ${OAUTH_JWKS_URI:-http://our-chat-server:3007/.well-known/jwks.json}
+  # CORS：经 our-chat nginx 同源反代 → 留空（生产默认拒绝跨源，同源不需要）
+  CORS_ORIGINS: ${CORS_ORIGINS:-}
+  DOCUMENT_MAX_BYTES: ${DOCUMENT_MAX_BYTES:-10485760}
+  DOCUMENT_STORAGE_DIR: /app/storage/documents
 
 services:
   postgres:
@@ -49,6 +78,24 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    networks: [agent-server]
+
+  # ── Pulsar（任务队列，自建 standalone；内存上限可经 PULSAR_MEM 调整）──
+  pulsar:
+    image: apachepulsar/pulsar:3.3.0
+    container_name: agent-pulsar
+    restart: unless-stopped
+    command: ['bin/pulsar', 'standalone']
+    environment:
+      PULSAR_MEM: ${PULSAR_MEM:--Xms512m -Xmx1536m -XX:MaxDirectMemorySize=512m}
+    volumes:
+      - pulsar_data:/pulsar/data
+    healthcheck:
+      test: ['CMD-SHELL', 'bin/pulsar-admin brokers healthcheck']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     networks: [agent-server]
 
   # ── Milvus(standalone) + etcd；对象存储用腾讯 COS（无 minio 容器）──
@@ -105,46 +152,28 @@ services:
         condition: service_healthy
     networks: [agent-server]
 
-  # ── 应用：node-server(HTTP/SSE) + node-worker(BullMQ)，同一镜像、不同入口 ──
-  node-server:
-    # 服务器本地构建(镜像不跨墙)。compose 在 docker/ 运行,上下文 = ../apps/node-server(CI scp 同步的源码)。
+  # ── 应用：rag-http(HTTP/SSE) + rag-worker(Pulsar 消费者)，同一镜像、不同入口 ──
+  rag-http:
+    # 服务器本地构建(镜像不跨墙)。compose 在 docker/ 运行,上下文 = 仓库根(CI scp 同步)。
     build:
-      context: ../apps/node-server
-      args:
-        NPM_REGISTRY: https://registry.npmmirror.com
-    image: agent-server-node:local
-    container_name: agent-node-server
+      context: ..
+      dockerfile: apps/rag-server/Dockerfile
+    image: agent-server-rag:local
+    container_name: agent-rag-http
     restart: unless-stopped
-    # ②机密/环境相关由 CI 生成的 .env 注入（LLM_API_KEY、OAUTH_ISSUER 等）
+    # ②机密/环境相关由 CI 生成的 .env 注入（LLM_API_KEY、JWT_SECRET、OAUTH_ISSUER 等）
     env_file:
       - .env
     # ①通用非机密默认值（environment 优先于 env_file，作为权威默认）
     environment:
-      NODE_ENV: production
+      <<: *rag-app-env
       PORT: '3101'
-      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agent_server}
-      REDIS_URL: redis://redis:6379
-      MILVUS_ADDRESS: milvus:19530
-      MILVUS_TOKEN: ${MILVUS_TOKEN:-}
-      MILVUS_COLLECTION: ${MILVUS_COLLECTION:-knowledge_chunks}
-      # 向量维度：必须与 LLM_EMBED_MODEL 输出一致（千问 text-embedding-v3 默认 1024）。换模型要重建集合！
-      MILVUS_VECTOR_SIZE: ${MILVUS_VECTOR_SIZE:-1024}
-      # 千问（DashScope）OpenAI 兼容端点；KEY 走 .env
-      LLM_BASE_URL: ${LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
-      LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:-qwen-plus}
-      LLM_EMBED_MODEL: ${LLM_EMBED_MODEL:-text-embedding-v3}
-      JWT_EXPIRE_SECONDS: ${JWT_EXPIRE_SECONDS:-7200}
-      # JWKS 验签：经 oc-shared 直连 our-chat 的 server 容器（按容器名）
-      OAUTH_JWKS_URI: ${OAUTH_JWKS_URI:-http://our-chat-server:3007/.well-known/jwks.json}
-      # CORS：经 our-chat nginx 同源反代 → 留空（生产默认拒绝跨源，同源不需要）
-      CORS_ORIGINS: ${CORS_ORIGINS:-}
-      DOCUMENT_MAX_BYTES: ${DOCUMENT_MAX_BYTES:-10485760}
-      DOCUMENT_STORAGE_DIR: /app/storage/documents
-      AGENT_OUTPUT_ROOT: /app/storage/agent-runs
+    ports:
+      - '${RAG_HTTP_PORT:-3101}:3101'
     volumes:
-      - node_storage:/app/storage
+      - rag_storage:/app/storage
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost:3101/api/health || exit 1']
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:3101/api/health || exit 1']
       interval: 15s
       timeout: 5s
       retries: 5
@@ -154,36 +183,28 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      pulsar:
+        condition: service_healthy
       milvus:
         condition: service_healthy
     # agent-server: 自身中间件；oc-shared: 与 our-chat 互通（被 nginx 反代 + 访问其 JWKS）
     networks: [agent-server, oc-shared]
 
-  node-worker:
-    # 与 node-server 同镜像(本地构建产物),仅入口不同;不重复 build,直接复用 node-server 构出的 tag。
-    image: agent-server-node:local
-    container_name: agent-node-worker
+  rag-worker:
+    # 与 rag-http 同镜像(本地构建产物),仅入口不同;不重复 build,直接复用 tag。
+    image: agent-server-rag:local
+    container_name: agent-rag-worker
     restart: unless-stopped
-    command: ['node', 'dist/main.worker']
+    command: ['rag-worker']
     env_file:
       - .env
     environment:
-      NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agent_server}
-      REDIS_URL: redis://redis:6379
-      MILVUS_ADDRESS: milvus:19530
-      MILVUS_COLLECTION: ${MILVUS_COLLECTION:-knowledge_chunks}
-      MILVUS_VECTOR_SIZE: ${MILVUS_VECTOR_SIZE:-1024}
-      LLM_BASE_URL: ${LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
-      LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:-qwen-plus}
-      LLM_EMBED_MODEL: ${LLM_EMBED_MODEL:-text-embedding-v3}
-      DOCUMENT_STORAGE_DIR: /app/storage/documents
-      AGENT_OUTPUT_ROOT: /app/storage/agent-runs
+      <<: *rag-app-env
     volumes:
-      - node_storage:/app/storage
+      - rag_storage:/app/storage
     depends_on:
-      # 等 node-server 健康（迁移已 apply）再起，避免 worker 打到未迁移的库
-      node-server:
+      # 等 rag-http 健康（迁移已 apply）再起，避免 worker 打到未迁移的库
+      rag-http:
         condition: service_healthy
     networks: [agent-server]
 
@@ -192,12 +213,14 @@ volumes:
     name: agent-server-postgres-data
   redis_data:
     name: agent-server-redis-data
+  pulsar_data:
+    name: agent-server-pulsar-data
   etcd_data:
     name: agent-server-etcd-data
   milvus_data:
     name: agent-server-milvus-data
-  node_storage:
-    name: agent-server-node-storage
+  rag_storage:
+    name: agent-server-rag-storage
 
 networks:
   agent-server:

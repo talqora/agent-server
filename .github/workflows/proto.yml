@@ -32,6 +32,10 @@ jobs:
       - uses: bufbuild/buf-setup-action@v1
         with:
           version: 1.71.0
+      # Python 生成目标(betterproto2)是本地插件:装编译器(版本与运行时 betterproto2 钉死)
+      - uses: astral-sh/setup-uv@v5
+      - name: Install Python proto plugin (betterproto2)
+        run: uv tool install betterproto2_compiler==0.10.0
       - name: Lint
         run: buf lint
       - name: Breaking change check (vs master)
@@ -46,4 +50,5 @@ jobs:
           buf generate
           git diff --exit-code -- \
             apps/node-server/src/contracts/gen \
-            packages/agent-contracts/src/gen
+            packages/agent-contracts/src/gen \
+            apps/rag-server/src/rag_server/contracts/gen
