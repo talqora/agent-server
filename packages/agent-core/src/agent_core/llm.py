@@ -42,13 +42,20 @@ class LlmClient:
     async def chat_stream(
         self, messages: Iterable[ChatCompletionMessageParam]
     ) -> AsyncIterator[str]:
-        """流式 chat:逐 token 产出 delta.content(供 SSE 边生成边推)。"""
+        """流式 chat:逐 token 产出 delta.content(供 SSE 边生成边推)。
+
+        finally 里显式关闭上游流:客户端断开(SSE 取消)时及时释放对 LLM 的连接,
+        不让生成在服务端空转。
+        """
         stream = await self._client.chat.completions.create(
             model=self.chat_model, messages=list(messages), stream=True
         )
-        async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+        try:
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        finally:
+            await stream.close()
 
     async def chat_with_tools(
         self,
