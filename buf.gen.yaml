@@ -21,3 +21,13 @@ plugins:
       - useDate=string
       - useOptionals=messages
       - esModuleInterop=true
+  # ③ rag-server(Python)消费:betterproto2 + pydantic dataclass 生成。
+  #    本地插件(betterproto2_compiler==0.10.0,与运行时 betterproto2 版本钉死):
+  #      uv tool install betterproto2_compiler==0.10.0   # 提供 protoc-gen-python_betterproto2
+  #    生成物 = 契约类型在 Python 侧的单一来源(禁止手改);FastAPI 直接消费:
+  #    请求走生成类型(导入后 apply_camel_aliases 注入 camelCase alias),
+  #    响应走 to_dict()(proto3-JSON,camelCase 权威)。
+  - local: protoc-gen-python_betterproto2
+    out: apps/rag-server/src/rag_server/contracts/gen
+    opt:
+      - pydantic_dataclasses

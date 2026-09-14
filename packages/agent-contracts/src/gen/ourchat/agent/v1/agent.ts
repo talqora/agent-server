@@ -19,7 +19,29 @@ export interface AgentUser {
   roleCode: string;
 }
 
-/** 用户上传的文档。status: uploaded|parsing|chunking|embedding|ready|failed */
+/** 本地注册(POST /api/auth/register;开发/兜底路径)。 */
+export interface RegisterReq {
+  /** 3-64,字母/数字/下划线/连字符 */
+  username: string;
+  /** 8-128 */
+  password: string;
+  /** 1-128 */
+  displayName: string;
+}
+
+/** 本地登录(POST /api/auth/login;HS256 兜底路径)。 */
+export interface LoginReq {
+  username: string;
+  password: string;
+}
+
+/** 注册/登录响应:签发的 JWT + 用户。 */
+export interface AuthResp {
+  token: string;
+  user?: AgentUser | undefined;
+}
+
+/** 用户上传的文档。status: queued(已上传) → processing(摄取中) → ready | failed */
 export interface AgentDocument {
   id: number;
   filename: string;
@@ -68,6 +90,25 @@ export interface AgentConversation {
   messages: AgentMessage[];
 }
 
+/** 新建会话请求(POST /api/conversations)。 */
+export interface CreateConversationReq {
+  /** 缺省由首条消息回填/默认"新对话" */
+  title?: string | undefined;
+}
+
+/** 发消息请求(POST /api/conversations/:id/messages,SSE 流式返回)。 */
+export interface SendMessageReq {
+  /** 非空 */
+  query: string;
+  /** 1-20,缺省 6 */
+  topK?: number | undefined;
+}
+
+/** 对话 SSE 逐 token 事件载荷(event: token,data 即本消息 JSON)。 */
+export interface ChatTokenEvent {
+  value: string;
+}
+
 /** 对话 SSE done 事件载荷:完成 + 引用列表。 */
 export interface ChatDoneEvent {
   messageId: number;
@@ -76,10 +117,21 @@ export interface ChatDoneEvent {
 
 /**
  * 运行事件(事件溯源:文档摄取 / agent 任务)。
- * id: agent-server 把 sequenceNo 转成 string 给 SSE id(MessageEvent.lastEventId
- * 协议本就是 string),保持 string 不要 Number() 以免非纯数字 id 被吞成 0。
- * data 由 type 决定字段,故用任意 JSON。
+ * 服务端返回**落库行形状**——GET /api/agent/sessions/:id 的 runs[].events 与
+ * SSE 的 data 均为本形状:runId、sequenceNo(单 run 内单调)、eventType、payload(业务字段)、createdAt。
+ * 注:SSE 帧首部另带 id(sequenceNo)与 event(eventType);前端把帧归一成 {id,type,data} 供 UI 用,
+ * 该归一形状不是服务端字段(见下方 RunEvent)。
  */
+export interface RunEventRow {
+  id: number;
+  runId: string;
+  sequenceNo: number;
+  eventType: string;
+  payload?: { [key: string]: any } | undefined;
+  createdAt: string;
+}
+
+/** (兼容保留)SSE 帧的归一形状:客户端构造(id=Last-Event-ID,type=event 名,data=行 JSON)。 */
 export interface RunEvent {
   id: string;
   type: string;
@@ -88,7 +140,7 @@ export interface RunEvent {
 
 /**
  * 运行(泛化:摄取作业 + agent 任务共用)。
- * kind: ingestion | agent_task;status: queued | running | succeeded | failed
+ * kind: ingestion | agent_task;status: queued | running | completed | failed
  */
 export interface AgentRun {
   runId: string;
@@ -104,8 +156,33 @@ export interface AgentRun {
   task?: string | undefined;
 }
 
-/** 提交 agent 任务响应。 */
+/**
+ * 运行详情形状:run 基础字段 + **落库行形状**的事件列表。
+ * (GET /api/agent/sessions/:id 的 runs[] 用本形状;不改动 AgentRun.events 既有元素类型以避免破坏性变更)
+ */
+export interface AgentRunDetail {
+  runId: string;
+  kind: string;
+  status: string;
+  progressMsg?: string | undefined;
+  createdAt: string;
+  events: RunEventRow[];
+  task?: string | undefined;
+}
+
+/** 运行快照(GET /api/runs/:runId):状态 + 全量事件(落库行形状)。 */
+export interface RunSnapshotResp {
+  run?: AgentRun | undefined;
+  events: RunEventRow[];
+}
+
+/** 提交 agent 任务响应(POST /api/agent/tasks)。 */
 export interface AgentTaskResp {
+  runId: string;
+}
+
+/** 通用 {runId} 响应(如 POST /api/runs/demo)。 */
+export interface RunIdResp {
   runId: string;
 }
 
@@ -119,4 +196,27 @@ export interface AgentTaskSession {
   createdAt: string;
   updatedAt: string;
   runs: AgentRun[];
+}
+
+/** 任务会话详情形状:会话字段 + **带落库行事件的** runs(GET /api/agent/sessions/:id 用本形状)。 */
+export interface AgentTaskSessionDetail {
+  id: number;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  runs: AgentRunDetail[];
+}
+
+/** 新建任务会话请求(POST /api/agent/sessions)。 */
+export interface CreateTaskSessionReq {
+  /** 缺省由首个任务回填/默认"新任务会话" */
+  title?: string | undefined;
+}
+
+/** 提交 agent 任务请求(POST /api/agent/tasks)。 */
+export interface CreateTaskReq {
+  /** 非空,≤2000 */
+  task: string;
+  /** 必须归属当前用户 */
+  sessionId: number;
 }

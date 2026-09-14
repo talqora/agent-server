@@ -6,6 +6,11 @@ import "google/protobuf/struct.proto";
 
 // agent-server(RAG 知识库 + agent 编排)的契约。主键用 int32(agent-server 用 Int
 // 避免 BigInt 在 Node 的 JSON 序列化坑);runId 等是字符串。
+//
+// 本文件是**业务类型的单一来源**:各端(web / 服务端)的类型均从这里生成,不手写平行定义。
+// JSON 线格式遵循 proto3 JSON 映射(lowerCamelCase 字段名)。
+
+// ============ 用户与鉴权 ============
 
 // 一键登录后前端只读的用户身份(GET /api/auth/me)。
 // token 铸造/续期不在本契约里(走 our-chat BFF /oauth/agent-token)。
@@ -16,7 +21,28 @@ message AgentUser {
   string role_code = 4;
 }
 
-// 用户上传的文档。status: uploaded|parsing|chunking|embedding|ready|failed
+// 本地注册(POST /api/auth/register;开发/兜底路径)。
+message RegisterReq {
+  string username = 1;     // 3-64,字母/数字/下划线/连字符
+  string password = 2;     // 8-128
+  string display_name = 3; // 1-128
+}
+
+// 本地登录(POST /api/auth/login;HS256 兜底路径)。
+message LoginReq {
+  string username = 1;
+  string password = 2;
+}
+
+// 注册/登录响应:签发的 JWT + 用户。
+message AuthResp {
+  string token = 1;
+  AgentUser user = 2;
+}
+
+// ============ 文档 ============
+
+// 用户上传的文档。status: queued(已上传) → processing(摄取中) → ready | failed
 message AgentDocument {
   int32 id = 1;
   string filename = 2;
@@ -34,6 +60,8 @@ message UploadDocResp {
   int32 document_id = 1;
   string run_id = 2;
 }
+
+// ============ 会话与消息 ============
 
 // RAG 引用:该回答引用了哪些 chunk。
 message Citation {
@@ -62,16 +90,45 @@ message AgentConversation {
   repeated AgentMessage messages = 5;
 }
 
+// 新建会话请求(POST /api/conversations)。
+message CreateConversationReq {
+  optional string title = 1; // 缺省由首条消息回填/默认"新对话"
+}
+
+// 发消息请求(POST /api/conversations/:id/messages,SSE 流式返回)。
+message SendMessageReq {
+  string query = 1;         // 非空
+  optional int32 top_k = 2; // 1-20,缺省 6
+}
+
+// 对话 SSE 逐 token 事件载荷(event: token,data 即本消息 JSON)。
+message ChatTokenEvent {
+  string value = 1;
+}
+
 // 对话 SSE done 事件载荷:完成 + 引用列表。
 message ChatDoneEvent {
   int32 message_id = 1;
   repeated Citation citations = 2;
 }
 
+// ============ 运行与事件 ============
+
 // 运行事件(事件溯源:文档摄取 / agent 任务)。
-// id: agent-server 把 sequenceNo 转成 string 给 SSE id(MessageEvent.lastEventId
-// 协议本就是 string),保持 string 不要 Number() 以免非纯数字 id 被吞成 0。
-// data 由 type 决定字段,故用任意 JSON。
+// 服务端返回**落库行形状**——GET /api/agent/sessions/:id 的 runs[].events 与
+// SSE 的 data 均为本形状:runId、sequenceNo(单 run 内单调)、eventType、payload(业务字段)、createdAt。
+// 注:SSE 帧首部另带 id(sequenceNo)与 event(eventType);前端把帧归一成 {id,type,data} 供 UI 用,
+// 该归一形状不是服务端字段(见下方 RunEvent)。
+message RunEventRow {
+  int32 id = 1;
+  string run_id = 2;
+  int32 sequence_no = 3;
+  string event_type = 4;
+  google.protobuf.Struct payload = 5;
+  string created_at = 6;
+}
+
+// (兼容保留)SSE 帧的归一形状:客户端构造(id=Last-Event-ID,type=event 名,data=行 JSON)。
 message RunEvent {
   string id = 1;
   string type = 2;
@@ -79,7 +136,7 @@ message RunEvent {
 }
 
 // 运行(泛化:摄取作业 + agent 任务共用)。
-// kind: ingestion | agent_task;status: queued | running | succeeded | failed
+// kind: ingestion | agent_task;status: queued | running | completed | failed
 message AgentRun {
   string run_id = 1;
   string kind = 2;
@@ -92,10 +149,35 @@ message AgentRun {
   optional string task = 7;
 }
 
-// 提交 agent 任务响应。
+// 运行详情形状:run 基础字段 + **落库行形状**的事件列表。
+// (GET /api/agent/sessions/:id 的 runs[] 用本形状;不改动 AgentRun.events 既有元素类型以避免破坏性变更)
+message AgentRunDetail {
+  string run_id = 1;
+  string kind = 2;
+  string status = 3;
+  optional string progress_msg = 4;
+  string created_at = 5;
+  repeated RunEventRow events = 6;
+  optional string task = 7;
+}
+
+// 运行快照(GET /api/runs/:runId):状态 + 全量事件(落库行形状)。
+message RunSnapshotResp {
+  AgentRun run = 1;
+  repeated RunEventRow events = 2;
+}
+
+// 提交 agent 任务响应(POST /api/agent/tasks)。
 message AgentTaskResp {
   string run_id = 1;
 }
+
+// 通用 {runId} 响应(如 POST /api/runs/demo)。
+message RunIdResp {
+  string run_id = 1;
+}
+
+// ============ 任务会话 ============
 
 // 任务会话:归组多次 agent 任务运行(与 AgentConversation 对齐)。
 // runs 仅在"取会话详情"时填充,列表接口不带(避免拉全量 transcript)。
@@ -105,4 +187,24 @@ message AgentTaskSession {
   string created_at = 3;
   string updated_at = 4;
   repeated AgentRun runs = 5;
+}
+
+// 任务会话详情形状:会话字段 + **带落库行事件的** runs(GET /api/agent/sessions/:id 用本形状)。
+message AgentTaskSessionDetail {
+  int32 id = 1;
+  string title = 2;
+  string created_at = 3;
+  string updated_at = 4;
+  repeated AgentRunDetail runs = 5;
+}
+
+// 新建任务会话请求(POST /api/agent/sessions)。
+message CreateTaskSessionReq {
+  optional string title = 1; // 缺省由首个任务回填/默认"新任务会话"
+}
+
+// 提交 agent 任务请求(POST /api/agent/tasks)。
+message CreateTaskReq {
+  string task = 1;      // 非空,≤2000
+  int32 session_id = 2; // 必须归属当前用户
 }
