@@ -62,6 +62,9 @@ class IngestionService:
                     chunk_overlap=self._settings.chunk_overlap,
                 ),
             )
+            if not chunks:
+                # 兜底守卫:空分片绝不静默标 ready(前端会显示明确错误)
+                raise RuntimeError("文档未提取到任何文本(可能是纯图片/扫描件或空文档)")
             await self._run_engine.emit(
                 run.run_id, "step", {"step": "chunking", "chunks": len(chunks)}
             )
