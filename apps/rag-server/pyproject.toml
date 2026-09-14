@@ -1,0 +1,51 @@
+[project]
+name = "rag-server"
+version = "0.1.0"
+description = "RAG 知识库服务(Python):文档摄取 / 检索 / 对话 / agent 任务(HTTP + worker 两角色)"
+requires-python = ">=3.12"
+dependencies = [
+  "agent-core",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "sse-starlette>=2.1",
+  "python-multipart>=0.0.9",
+  "asyncpg>=0.29",
+  "alembic>=1.13",
+  # 契约运行时:与 buf.gen.yaml 的 protoc-gen-python_betterproto2(0.10.0)版本钉死
+  "betterproto2==0.10.0",
+  "bcrypt>=4.1",
+  "PyMuPDF>=1.24",
+  "python-docx>=1.1",
+  "httpx>=0.27",
+]
+
+[project.scripts]
+rag-http = "rag_server.main:run"
+rag-worker = "rag_server.worker:run"
+
+[tool.uv.sources]
+agent-core = { workspace = true }
+
+[dependency-groups]
+dev = [
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.5",
+  "mypy>=1.10",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rag_server"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+  # 生成物(betterproto2)内部的 pydantic 弃用提示:上游生成代码问题,不阻塞测试
+  "ignore::pydantic.PydanticDeprecatedSince212",
+  "ignore::jwt.warnings.InsecureKeyLengthWarning",
+]

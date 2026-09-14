@@ -26,3 +26,12 @@ Thumbs.db
 
 # === 存储 ===
 **/storage/
+
+# === Python (apps/rag-server / packages/agent-core, uv workspace) ===
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/

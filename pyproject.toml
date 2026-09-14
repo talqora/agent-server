@@ -1,0 +1,50 @@
+# agent-server 单仓多服务工作区(uv workspace)
+#
+# 成员:
+#   - apps/rag-server     RAG 知识库服务(Python,HTTP + worker 两角色)
+#   - packages/agent-core 多服务共享库(auth / run-engine / queue / llm / vector / 配置与日志)
+#
+# 常用命令(仓库根执行):
+#   uv sync                    # 安装全部成员依赖(可编辑安装)
+#   uv run ruff check .        # lint
+#   uv run mypy apps/rag-server/src packages/agent-core/src   # 类型检查
+#   uv run pytest              # 测试(在各成员内执行或指定路径)
+[project]
+name = "agent-server-workspace"
+version = "0.1.0"
+description = "agent-server 多服务工作区(rag-server + agent-core)"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["apps/rag-server", "packages/agent-core"]
+
+# ============ ruff(全仓共享配置) ============
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# 生成物与对照代码不 lint:contracts/gen 由 buf 生成;apps/node-server 是保留的 Node 对照实现。
+extend-exclude = ["**/contracts/gen", "apps/node-server"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "ASYNC", "RUF"]
+ignore = [
+  "E501", # 行长由 formatter 管理
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ============ mypy(全仓共享配置,strict) ============
+[tool.mypy]
+python_version = "3.12"
+strict = true
+# 生成物不做类型检查(由 buf/插件保证);其余全部严格。
+exclude = ["contracts/gen/"]
+# 各成员通过 uv 可编辑安装进 venv,mypy 直接解析 import。
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+# betterproto2 生成物无类型包信息时,避免噪音(生成目录已 exclude,此处兜底第三方)
+module = ["pymilvus.*", "pulsar.*"]
+ignore_missing_imports = true
